@@ -148,6 +148,15 @@ button:focus-visible {
   }
 }
 
+/* Fix modal overlay z-index issue */
+[data-radix-dialog-overlay] {
+  pointer-events: none;
+}
+
+[data-radix-dialog-content] {
+  pointer-events: auto;
+}
+
 /* Reduced motion support */
 @media (prefers-reduced-motion: reduce) {
   * {
