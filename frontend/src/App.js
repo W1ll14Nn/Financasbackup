@@ -11,7 +11,8 @@ import { Badge } from './components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
-import { AlertTriangle, Plus, TrendingUp, TrendingDown, DollarSign, Settings, Trash2 } from 'lucide-react';
+import { Checkbox } from './components/ui/checkbox';
+import { AlertTriangle, Plus, TrendingUp, TrendingDown, DollarSign, Settings, Trash2, Calendar, CheckCircle, Clock } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -24,11 +25,13 @@ const months = [
 
 function App() {
   const [transactions, setTransactions] = useState([]);
+  const [fixedExpenses, setFixedExpenses] = useState([]);
   const [monthlyReport, setMonthlyReport] = useState(null);
   const [dashboardData, setDashboardData] = useState(null);
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth() + 1);
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
   const [isAddTransactionOpen, setIsAddTransactionOpen] = useState(false);
+  const [isAddFixedExpenseOpen, setIsAddFixedExpenseOpen] = useState(false);
   const [isSetLimitOpen, setIsSetLimitOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -37,6 +40,11 @@ function App() {
     tipo: '',
     valor: '',
     descricao: ''
+  });
+  const [newFixedExpense, setNewFixedExpense] = useState({
+    nome: '',
+    valor: '',
+    data_vencimento: ''
   });
   const [newLimit, setNewLimit] = useState('');
 
@@ -49,12 +57,14 @@ function App() {
   const loadMonthlyData = async () => {
     try {
       setLoading(true);
-      const [transactionsRes, reportRes] = await Promise.all([
+      const [transactionsRes, fixedExpensesRes, reportRes] = await Promise.all([
         axios.get(`${API}/transactions?mes=${currentMonth}&ano=${currentYear}`),
+        axios.get(`${API}/fixed-expenses?mes=${currentMonth}&ano=${currentYear}`),
         axios.get(`${API}/reports/${currentMonth}/${currentYear}`)
       ]);
       
       setTransactions(transactionsRes.data);
+      setFixedExpenses(fixedExpensesRes.data);
       setMonthlyReport(reportRes.data);
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
@@ -90,12 +100,51 @@ function App() {
     }
   };
 
+  const handleAddFixedExpense = async (e) => {
+    e.preventDefault();
+    try {
+      await axios.post(`${API}/fixed-expenses`, {
+        nome: newFixedExpense.nome,
+        valor: parseFloat(newFixedExpense.valor),
+        data_vencimento: parseInt(newFixedExpense.data_vencimento),
+        mes: currentMonth,
+        ano: currentYear
+      });
+      
+      setNewFixedExpense({ nome: '', valor: '', data_vencimento: '' });
+      setIsAddFixedExpenseOpen(false);
+      loadMonthlyData();
+    } catch (error) {
+      console.error('Erro ao adicionar despesa fixa:', error);
+    }
+  };
+
   const handleDeleteTransaction = async (transactionId) => {
     try {
       await axios.delete(`${API}/transactions/${transactionId}`);
       loadMonthlyData();
     } catch (error) {
       console.error('Erro ao deletar transação:', error);
+    }
+  };
+
+  const handleDeleteFixedExpense = async (expenseId) => {
+    try {
+      await axios.delete(`${API}/fixed-expenses/${expenseId}`);
+      loadMonthlyData();
+    } catch (error) {
+      console.error('Erro ao deletar despesa fixa:', error);
+    }
+  };
+
+  const handleToggleFixedExpensePaid = async (expenseId, currentPaidStatus) => {
+    try {
+      await axios.put(`${API}/fixed-expenses/${expenseId}`, {
+        pago: !currentPaidStatus
+      });
+      loadMonthlyData();
+    } catch (error) {
+      console.error('Erro ao atualizar status da despesa fixa:', error);
     }
   };
 
@@ -132,6 +181,8 @@ function App() {
     mes: months[item.mes - 1].substring(0, 3),
     receitas: item.receitas,
     despesas: item.despesas,
+    'despesas variáveis': item.despesas_variaveis,
+    'despesas fixas': item.despesas_fixas,
     saldo: item.saldo
   })) : [];
 
@@ -152,7 +203,7 @@ function App() {
         {/* Header */}
         <div className="text-center py-8">
           <h1 className="text-4xl font-bold text-gray-800 mb-2">💰 Controle Financeiro</h1>
-          <p className="text-gray-600">Gerencie suas receitas e despesas com facilidade</p>
+          <p className="text-gray-600">Gerencie suas receitas, despesas e gastos fixos com facilidade</p>
         </div>
 
         {/* Month/Year Selector */}
@@ -249,6 +300,65 @@ function App() {
                   </DialogContent>
                 </Dialog>
 
+                <Dialog open={isAddFixedExpenseOpen} onOpenChange={setIsAddFixedExpenseOpen}>
+                  <DialogTrigger asChild>
+                    <Button className="bg-blue-600 hover:bg-blue-700">
+                      <Calendar className="w-4 h-4 mr-2" />
+                      Despesa Fixa
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Adicionar Despesa Fixa</DialogTitle>
+                      <DialogDescription>
+                        Adicione uma despesa fixa mensal para {months[currentMonth - 1]} {currentYear}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleAddFixedExpense} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>Nome da Despesa</Label>
+                        <Input
+                          placeholder="Ex: Aluguel, Financiamento, Internet..."
+                          value={newFixedExpense.nome}
+                          onChange={(e) => setNewFixedExpense({...newFixedExpense, nome: e.target.value})}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Valor</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          placeholder="0,00"
+                          value={newFixedExpense.valor}
+                          onChange={(e) => setNewFixedExpense({...newFixedExpense, valor: e.target.value})}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Data de Vencimento</Label>
+                        <Select value={newFixedExpense.data_vencimento} onValueChange={(value) => setNewFixedExpense({...newFixedExpense, data_vencimento: value})}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Dia do mês" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Array.from({length: 31}, (_, i) => i + 1).map(day => (
+                              <SelectItem key={day} value={day.toString()}>
+                                Dia {day}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <DialogFooter>
+                        <Button type="submit" disabled={!newFixedExpense.nome || !newFixedExpense.valor || !newFixedExpense.data_vencimento}>
+                          Adicionar
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+
                 <Dialog open={isSetLimitOpen} onOpenChange={setIsSetLimitOpen}>
                   <DialogTrigger asChild>
                     <Button variant="outline">
@@ -294,14 +404,14 @@ function App() {
             <AlertTriangle className="h-4 w-4 text-red-600" />
             <AlertDescription className="text-red-800">
               <strong>Atenção!</strong> Você excedeu seu limite mensal de {formatCurrency(monthlyReport.limite_configurado)}.
-              Despesas atuais: {formatCurrency(monthlyReport.total_despesas)}.
+              Gastos totais: {formatCurrency(monthlyReport.total_despesas + monthlyReport.total_despesas_fixas)}.
             </AlertDescription>
           </Alert>
         )}
 
         {/* Summary Cards */}
         {monthlyReport && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             <Card className="backdrop-blur-sm bg-white/80 border-0 shadow-lg">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600">
@@ -310,7 +420,7 @@ function App() {
                 <TrendingUp className="h-4 w-4 text-emerald-600" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">
+                <div className="text-xl font-bold text-emerald-600">
                   {formatCurrency(monthlyReport.total_receitas)}
                 </div>
               </CardContent>
@@ -319,12 +429,12 @@ function App() {
             <Card className="backdrop-blur-sm bg-white/80 border-0 shadow-lg">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600">
-                  Despesas
+                  Despesas Variáveis
                 </CardTitle>
                 <TrendingDown className="h-4 w-4 text-red-600" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-red-600">
+                <div className="text-xl font-bold text-red-600">
                   {formatCurrency(monthlyReport.total_despesas)}
                 </div>
               </CardContent>
@@ -333,12 +443,43 @@ function App() {
             <Card className="backdrop-blur-sm bg-white/80 border-0 shadow-lg">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600">
-                  Saldo
+                  Despesas Fixas
+                </CardTitle>
+                <Calendar className="h-4 w-4 text-orange-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold text-orange-600">
+                  {formatCurrency(monthlyReport.total_despesas_fixas)}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  Pagas: {formatCurrency(monthlyReport.despesas_fixas_pagas)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="backdrop-blur-sm bg-white/80 border-0 shadow-lg">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">
+                  Pendentes
+                </CardTitle>
+                <Clock className="h-4 w-4 text-amber-600" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-xl font-bold text-amber-600">
+                  {formatCurrency(monthlyReport.despesas_fixas_pendentes)}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="backdrop-blur-sm bg-white/80 border-0 shadow-lg">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-gray-600">
+                  Saldo Final
                 </CardTitle>
                 <DollarSign className={`h-4 w-4 ${monthlyReport.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`} />
               </CardHeader>
               <CardContent>
-                <div className={`text-2xl font-bold ${monthlyReport.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                <div className={`text-xl font-bold ${monthlyReport.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                   {formatCurrency(monthlyReport.saldo)}
                 </div>
               </CardContent>
@@ -348,8 +489,9 @@ function App() {
 
         {/* Main Content */}
         <Tabs defaultValue="transactions" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="transactions">Transações</TabsTrigger>
+            <TabsTrigger value="fixed-expenses">Despesas Fixas</TabsTrigger>
             <TabsTrigger value="charts">Gráficos</TabsTrigger>
           </TabsList>
 
@@ -358,7 +500,7 @@ function App() {
               <CardHeader>
                 <CardTitle>Transações de {months[currentMonth - 1]} {currentYear}</CardTitle>
                 <CardDescription>
-                  Lista de todas as receitas e despesas do mês
+                  Lista de todas as receitas e despesas variáveis do mês
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -411,13 +553,77 @@ function App() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="fixed-expenses">
+            <Card className="backdrop-blur-sm bg-white/80 border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle>Despesas Fixas - {months[currentMonth - 1]} {currentYear}</CardTitle>
+                <CardDescription>
+                  Gerencie suas despesas mensais fixas e controle de pagamentos
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {fixedExpenses.length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Nome da Despesa</TableHead>
+                        <TableHead>Vencimento</TableHead>
+                        <TableHead className="text-right">Valor</TableHead>
+                        <TableHead className="text-right">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {fixedExpenses.map((expense) => (
+                        <TableRow key={expense.id} className={expense.pago ? 'opacity-75' : ''}>
+                          <TableCell>
+                            <div className="flex items-center space-x-2">
+                              <Checkbox
+                                checked={expense.pago}
+                                onCheckedChange={() => handleToggleFixedExpensePaid(expense.id, expense.pago)}
+                              />
+                              {expense.pago ? (
+                                <CheckCircle className="w-4 h-4 text-emerald-600" />
+                              ) : (
+                                <Clock className="w-4 h-4 text-amber-600" />
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className={expense.pago ? 'line-through' : ''}>{expense.nome}</TableCell>
+                          <TableCell>Dia {expense.data_vencimento}</TableCell>
+                          <TableCell className={`text-right font-medium ${expense.pago ? 'text-gray-500' : 'text-orange-600'}`}>
+                            {formatCurrency(expense.valor)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteFixedExpense(expense.id)}
+                              className="text-red-600 hover:text-red-700"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    Nenhuma despesa fixa cadastrada para este mês.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="charts">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Bar Chart */}
               <Card className="backdrop-blur-sm bg-white/80 border-0 shadow-lg">
                 <CardHeader>
                   <CardTitle>Receitas vs Despesas ({currentYear})</CardTitle>
-                  <CardDescription>Comparação mensal</CardDescription>
+                  <CardDescription>Comparação mensal incluindo despesas fixas</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={300}>
@@ -428,7 +634,8 @@ function App() {
                       <Tooltip formatter={(value) => formatCurrency(value)} />
                       <Legend />
                       <Bar dataKey="receitas" fill="#10b981" name="Receitas" />
-                      <Bar dataKey="despesas" fill="#ef4444" name="Despesas" />
+                      <Bar dataKey="despesas variáveis" fill="#ef4444" name="Despesas Variáveis" />
+                      <Bar dataKey="despesas fixas" fill="#f97316" name="Despesas Fixas" />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -438,7 +645,7 @@ function App() {
               <Card className="backdrop-blur-sm bg-white/80 border-0 shadow-lg">
                 <CardHeader>
                   <CardTitle>Evolução do Saldo ({currentYear})</CardTitle>
-                  <CardDescription>Variação mensal do saldo</CardDescription>
+                  <CardDescription>Variação mensal do saldo final</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={300}>
@@ -448,7 +655,7 @@ function App() {
                       <YAxis />
                       <Tooltip formatter={(value) => formatCurrency(value)} />
                       <Legend />
-                      <Line type="monotone" dataKey="saldo" stroke="#6366f1" strokeWidth={3} name="Saldo" />
+                      <Line type="monotone" dataKey="saldo" stroke="#6366f1" strokeWidth={3} name="Saldo Final" />
                     </LineChart>
                   </ResponsiveContainer>
                 </CardContent>

@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from decimal import Decimal
 
 ROOT_DIR = Path(__file__).parent
@@ -41,6 +41,26 @@ class TransactionCreate(BaseModel):
     descricao: str
     data: Optional[datetime] = None
 
+class FixedExpense(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    nome: str
+    valor: float
+    data_vencimento: int  # dia do mês (1-31)
+    pago: bool = False
+    mes: int
+    ano: int
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class FixedExpenseCreate(BaseModel):
+    nome: str
+    valor: float
+    data_vencimento: int
+    mes: int
+    ano: int
+
+class FixedExpenseUpdate(BaseModel):
+    pago: bool
+
 class AlertConfig(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     limite_mensal: float
@@ -60,6 +80,10 @@ class MonthlyReport(BaseModel):
     total_despesas: float
     saldo: float
     transacoes: List[Transaction]
+    despesas_fixas: List[FixedExpense]
+    total_despesas_fixas: float
+    despesas_fixas_pagas: float
+    despesas_fixas_pendentes: float
     limite_excedido: bool = False
     limite_configurado: Optional[float] = None
 
@@ -74,6 +98,8 @@ def prepare_for_mongo(data):
 def parse_from_mongo(item):
     if isinstance(item.get('data'), str):
         item['data'] = datetime.fromisoformat(item['data'])
+    if isinstance(item.get('created_at'), str):
+        item['created_at'] = datetime.fromisoformat(item['created_at'])
     return item
 
 # Transaction endpoints
@@ -123,6 +149,60 @@ async def delete_transaction(transaction_id: str):
         raise HTTPException(status_code=404, detail="Transaction not found")
     return {"message": "Transaction deleted successfully"}
 
+# Fixed Expenses endpoints
+@api_router.post("/fixed-expenses", response_model=FixedExpense)
+async def create_fixed_expense(expense: FixedExpenseCreate):
+    expense_dict = expense.dict()
+    expense_obj = FixedExpense(**expense_dict)
+    
+    # Prepare for MongoDB
+    expense_dict = prepare_for_mongo(expense_obj.dict())
+    
+    # Insert into database
+    await db.fixed_expenses.insert_one(expense_dict)
+    
+    return expense_obj
+
+@api_router.get("/fixed-expenses", response_model=List[FixedExpense])
+async def get_fixed_expenses(mes: Optional[int] = None, ano: Optional[int] = None):
+    query = {}
+    if mes and ano:
+        query = {"mes": mes, "ano": ano}
+    elif ano:
+        query = {"ano": ano}
+    
+    expenses = await db.fixed_expenses.find(query).sort("data_vencimento", 1).to_list(1000)
+    
+    # Parse from MongoDB
+    parsed_expenses = [parse_from_mongo(expense) for expense in expenses]
+    
+    return [FixedExpense(**expense) for expense in parsed_expenses]
+
+@api_router.put("/fixed-expenses/{expense_id}", response_model=FixedExpense)
+async def update_fixed_expense(expense_id: str, update: FixedExpenseUpdate):
+    result = await db.fixed_expenses.update_one(
+        {"id": expense_id},
+        {"$set": {"pago": update.pago}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Fixed expense not found")
+    
+    # Get updated expense
+    expense = await db.fixed_expenses.find_one({"id": expense_id})
+    if expense:
+        parsed_expense = parse_from_mongo(expense)
+        return FixedExpense(**parsed_expense)
+    
+    raise HTTPException(status_code=404, detail="Fixed expense not found")
+
+@api_router.delete("/fixed-expenses/{expense_id}")
+async def delete_fixed_expense(expense_id: str):
+    result = await db.fixed_expenses.delete_one({"id": expense_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Fixed expense not found")
+    return {"message": "Fixed expense deleted successfully"}
+
 # Alert configuration endpoints
 @api_router.post("/alerts", response_model=AlertConfig)
 async def create_alert_config(alert: AlertConfigCreate):
@@ -157,10 +237,23 @@ async def get_monthly_report(mes: int, ano: int):
     parsed_transactions = [parse_from_mongo(trans) for trans in transactions]
     trans_objects = [Transaction(**trans) for trans in parsed_transactions]
     
+    # Get fixed expenses for the month
+    fixed_expenses = await db.fixed_expenses.find({"mes": mes, "ano": ano}).to_list(1000)
+    parsed_fixed_expenses = [parse_from_mongo(expense) for expense in fixed_expenses]
+    fixed_expense_objects = [FixedExpense(**expense) for expense in parsed_fixed_expenses]
+    
     # Calculate totals
     total_receitas = sum(t.valor for t in trans_objects if t.tipo == "receita")
     total_despesas = sum(t.valor for t in trans_objects if t.tipo == "despesa")
-    saldo = total_receitas - total_despesas
+    
+    # Calculate fixed expenses totals
+    total_despesas_fixas = sum(e.valor for e in fixed_expense_objects)
+    despesas_fixas_pagas = sum(e.valor for e in fixed_expense_objects if e.pago)
+    despesas_fixas_pendentes = sum(e.valor for e in fixed_expense_objects if not e.pago)
+    
+    # Total including fixed expenses
+    total_despesas_all = total_despesas + total_despesas_fixas
+    saldo = total_receitas - total_despesas_all
     
     # Check alert configuration
     alert_config = await db.alerts.find_one({"mes": mes, "ano": ano, "ativo": True})
@@ -169,7 +262,7 @@ async def get_monthly_report(mes: int, ano: int):
     
     if alert_config:
         limite_configurado = alert_config["limite_mensal"]
-        limite_excedido = total_despesas > limite_configurado
+        limite_excedido = total_despesas_all > limite_configurado
     
     return MonthlyReport(
         mes=mes,
@@ -178,6 +271,10 @@ async def get_monthly_report(mes: int, ano: int):
         total_despesas=total_despesas,
         saldo=saldo,
         transacoes=trans_objects,
+        despesas_fixas=fixed_expense_objects,
+        total_despesas_fixas=total_despesas_fixas,
+        despesas_fixas_pagas=despesas_fixas_pagas,
+        despesas_fixas_pendentes=despesas_fixas_pendentes,
         limite_excedido=limite_excedido,
         limite_configurado=limite_configurado
     )
@@ -192,7 +289,9 @@ async def get_dashboard_data(ano: int):
         monthly_data.append({
             "mes": mes,
             "receitas": report.total_receitas,
-            "despesas": report.total_despesas,
+            "despesas": report.total_despesas + report.total_despesas_fixas,
+            "despesas_variaveis": report.total_despesas,
+            "despesas_fixas": report.total_despesas_fixas,
             "saldo": report.saldo
         })
     
