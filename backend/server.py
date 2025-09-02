@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -10,6 +11,11 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, date
 from decimal import Decimal
+import io
+import csv
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -101,6 +107,10 @@ def parse_from_mongo(item):
     if isinstance(item.get('created_at'), str):
         item['created_at'] = datetime.fromisoformat(item['created_at'])
     return item
+
+def format_currency_br(value):
+    """Format currency in Brazilian Real format"""
+    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 # Transaction endpoints
 @api_router.post("/transactions", response_model=Transaction)
@@ -296,6 +306,203 @@ async def get_dashboard_data(ano: int):
         })
     
     return {"ano": ano, "dados_mensais": monthly_data}
+
+# Export endpoints
+@api_router.get("/export/csv/{mes}/{ano}")
+async def export_csv(mes: int, ano: int):
+    """Export monthly data to CSV format"""
+    report = await get_monthly_report(mes, ano)
+    
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=';')  # Using semicolon for better Excel compatibility
+    
+    # Write headers and summary
+    writer.writerow([f"RELATÓRIO FINANCEIRO - {['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][mes]} {ano}"])
+    writer.writerow([])
+    
+    # Summary section
+    writer.writerow(["RESUMO MENSAL"])
+    writer.writerow(["Receitas Totais", f"R$ {report.total_receitas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")])
+    writer.writerow(["Despesas Variáveis", f"R$ {report.total_despesas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")])
+    writer.writerow(["Despesas Fixas", f"R$ {report.total_despesas_fixas:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")])
+    writer.writerow(["Saldo Final", f"R$ {report.saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")])
+    writer.writerow([])
+    
+    # Transactions section
+    writer.writerow(["TRANSAÇÕES"])
+    writer.writerow(["Data", "Tipo", "Descrição", "Valor"])
+    
+    for transaction in report.transacoes:
+        formatted_date = transaction.data.strftime("%d/%m/%Y")
+        formatted_value = f"R$ {transaction.valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        if transaction.tipo == "despesa":
+            formatted_value = f"-{formatted_value}"
+        writer.writerow([formatted_date, transaction.tipo.title(), transaction.descricao, formatted_value])
+    
+    writer.writerow([])
+    
+    # Fixed expenses section
+    writer.writerow(["DESPESAS FIXAS"])
+    writer.writerow(["Nome", "Vencimento", "Valor", "Status"])
+    
+    for expense in report.despesas_fixas:
+        formatted_value = f"R$ {expense.valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        status = "Pago" if expense.pago else "Pendente"
+        writer.writerow([expense.nome, f"Dia {expense.data_vencimento}", formatted_value, status])
+    
+    # Prepare response
+    output.seek(0)
+    month_name = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][mes]
+    filename = f"financas_{month_name}_{ano}.csv"
+    
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode('utf-8-sig')),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@api_router.get("/export/excel/{mes}/{ano}")
+async def export_excel(mes: int, ano: int):
+    """Export monthly data to Excel format"""
+    report = await get_monthly_report(mes, ano)
+    
+    # Create workbook
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    month_names = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+    month_name = month_names[mes]
+    ws.title = f"{month_name} {ano}"
+    
+    # Styles
+    header_font = Font(bold=True, size=14, color="FFFFFF")
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    summary_font = Font(bold=True, size=12)
+    currency_font = Font(size=11)
+    
+    row = 1
+    
+    # Title
+    ws.merge_cells(f'A{row}:E{row}')
+    title_cell = ws[f'A{row}']
+    title_cell.value = f"RELATÓRIO FINANCEIRO - {month_name} {ano}"
+    title_cell.font = Font(bold=True, size=16)
+    title_cell.alignment = Alignment(horizontal="center")
+    row += 3
+    
+    # Summary section
+    ws[f'A{row}'] = "RESUMO MENSAL"
+    ws[f'A{row}'].font = summary_font
+    row += 1
+    
+    summary_data = [
+        ("Receitas Totais", report.total_receitas, "4CAF50"),
+        ("Despesas Variáveis", report.total_despesas, "F44336"),
+        ("Despesas Fixas", report.total_despesas_fixas, "FF9800"),
+        ("Saldo Final", report.saldo, "4CAF50" if report.saldo >= 0 else "F44336")
+    ]
+    
+    for label, value, color in summary_data:
+        ws[f'A{row}'] = label
+        ws[f'B{row}'] = value
+        ws[f'B{row}'].number_format = 'R$ #,##0.00'
+        ws[f'A{row}'].font = Font(bold=True)
+        ws[f'B{row}'].font = Font(bold=True, color=color)
+        row += 1
+    
+    row += 2
+    
+    # Transactions section
+    ws[f'A{row}'] = "TRANSAÇÕES"
+    ws[f'A{row}'].font = summary_font
+    row += 1
+    
+    # Transaction headers
+    headers = ["Data", "Tipo", "Descrição", "Valor"]
+    for col, header in enumerate(headers, 1):
+        cell = ws[f'{get_column_letter(col)}{row}']
+        cell.value = header
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    
+    row += 1
+    
+    # Transaction data
+    for transaction in report.transacoes:
+        ws[f'A{row}'] = transaction.data.strftime("%d/%m/%Y")
+        ws[f'B{row}'] = transaction.tipo.title()
+        ws[f'C{row}'] = transaction.descricao
+        ws[f'D{row}'] = transaction.valor if transaction.tipo == "receita" else -transaction.valor
+        ws[f'D{row}'].number_format = 'R$ #,##0.00'
+        
+        # Color coding
+        if transaction.tipo == "receita":
+            ws[f'D{row}'].font = Font(color="4CAF50")
+        else:
+            ws[f'D{row}'].font = Font(color="F44336")
+        
+        row += 1
+    
+    row += 2
+    
+    # Fixed expenses section
+    ws[f'A{row}'] = "DESPESAS FIXAS"
+    ws[f'A{row}'].font = summary_font
+    row += 1
+    
+    # Fixed expenses headers
+    headers = ["Nome", "Vencimento", "Valor", "Status"]
+    for col, header in enumerate(headers, 1):
+        cell = ws[f'{get_column_letter(col)}{row}']
+        cell.value = header
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    
+    row += 1
+    
+    # Fixed expenses data
+    for expense in report.despesas_fixas:
+        ws[f'A{row}'] = expense.nome
+        ws[f'B{row}'] = f"Dia {expense.data_vencimento}"
+        ws[f'C{row}'] = expense.valor
+        ws[f'C{row}'].number_format = 'R$ #,##0.00'
+        ws[f'D{row}'] = "Pago" if expense.pago else "Pendente"
+        
+        # Color coding for status
+        if expense.pago:
+            ws[f'D{row}'].font = Font(color="4CAF50")
+        else:
+            ws[f'D{row}'].font = Font(color="FF9800")
+        
+        row += 1
+    
+    # Auto-adjust column widths
+    for column in ws.columns:
+        max_length = 0
+        column_letter = column[0].column_letter
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 50)
+        ws.column_dimensions[column_letter].width = adjusted_width
+    
+    # Save to memory
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    filename = f"financas_{month_name}_{ano}.xlsx"
+    
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 # Include the router in the main app
 app.include_router(api_router)

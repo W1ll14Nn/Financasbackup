@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Checkbox } from './components/ui/checkbox';
-import { AlertTriangle, Plus, TrendingUp, TrendingDown, DollarSign, Settings, Trash2, Calendar, CheckCircle, Clock } from 'lucide-react';
+import { AlertTriangle, Plus, TrendingUp, TrendingDown, DollarSign, Settings, Trash2, Calendar, CheckCircle, Clock, Download, FileSpreadsheet } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -34,6 +34,7 @@ function App() {
   const [isAddFixedExpenseOpen, setIsAddFixedExpenseOpen] = useState(false);
   const [isSetLimitOpen, setIsSetLimitOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
 
   // Form states
   const [newTransaction, setNewTransaction] = useState({
@@ -165,6 +166,58 @@ function App() {
     }
   };
 
+  const handleExportExcel = async () => {
+    try {
+      setExportLoading(true);
+      const response = await axios.get(`${API}/export/excel/${currentMonth}/${currentYear}`, {
+        responseType: 'blob'
+      });
+      
+      // Create download link
+      const blob = new Blob([response.data], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `financas_${months[currentMonth - 1]}_${currentYear}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Erro ao exportar Excel:', error);
+      alert('Erro ao exportar arquivo Excel. Tente novamente.');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleExportCSV = async () => {
+    try {
+      setExportLoading(true);
+      const response = await axios.get(`${API}/export/csv/${currentMonth}/${currentYear}`, {
+        responseType: 'blob'
+      });
+      
+      // Create download link
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `financas_${months[currentMonth - 1]}_${currentYear}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Erro ao exportar CSV:', error);
+      alert('Erro ao exportar arquivo CSV. Tente novamente.');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   const formatCurrency = (value) => {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
@@ -243,7 +296,36 @@ function App() {
                 </div>
               </div>
               
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
+                {/* Export Buttons */}
+                <Button 
+                  onClick={handleExportExcel}
+                  disabled={exportLoading}
+                  variant="outline"
+                  className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                >
+                  {exportLoading ? (
+                    <div className="w-4 h-4 mr-2 animate-spin rounded-full border-2 border-green-600 border-t-transparent"></div>
+                  ) : (
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                  )}
+                  Excel
+                </Button>
+                
+                <Button 
+                  onClick={handleExportCSV}
+                  disabled={exportLoading}
+                  variant="outline"
+                  className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                >
+                  {exportLoading ? (
+                    <div className="w-4 h-4 mr-2 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></div>
+                  ) : (
+                    <Download className="w-4 h-4 mr-2" />
+                  )}
+                  CSV
+                </Button>
+
                 <Dialog open={isAddTransactionOpen} onOpenChange={setIsAddTransactionOpen}>
                   <DialogTrigger asChild>
                     <Button className="bg-emerald-600 hover:bg-emerald-700">
@@ -408,6 +490,24 @@ function App() {
             </AlertDescription>
           </Alert>
         )}
+
+        {/* Export Info Card */}
+        <Card className="backdrop-blur-sm bg-gradient-to-r from-blue-50 to-green-50 border-0 shadow-lg">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <FileSpreadsheet className="w-6 h-6 text-blue-600" />
+                <div>
+                  <h3 className="font-semibold text-gray-800">Exportar para Planilhas</h3>
+                  <p className="text-sm text-gray-600">Baixe seus dados em Excel ou CSV para usar no Google Sheets</p>
+                </div>
+              </div>
+              <div className="text-sm text-gray-500">
+                {months[currentMonth - 1]} {currentYear}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Summary Cards */}
         {monthlyReport && (
